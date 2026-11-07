@@ -8,18 +8,25 @@ from concurrent.futures import ProcessPoolExecutor
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, "tools"))
 
-OPPS = ["random", "station", "pot", "half", "foldy", "tight", "loose", "nit", "maniac", "randagg", "overfold"]
+OPPS = ["random", "station", "pot", "half", "foldy", "tight", "loose", "nit", "maniac", "randagg", "overfold",
+        "bluffer", "lag", "trapper", "sizer", "pre3bet", "rivbluff", "valuestation", "tilt", "exploiter", "exploiter2", "stealer"]
 
 
 def run(args):
     over, opp, deals, seed = args
+    over = dict(over)
     import selfplay, bot_core
     for k, v in over.items():
         if isinstance(v, dict) and isinstance(bot_core.PARAMS.get(k), dict):
             bot_core.PARAMS[k].update({int(a): b for a, b in v.items()})
         else:
             bot_core.PARAMS[k] = v
-    m, se, A, B = selfplay.match(selfplay.get("agent"), selfplay.get("tools/opponents.py:" + opp), deals, seed)
+    me = selfplay.get(over.pop("_me", "agent")) if "_me" in over else selfplay.get("agent")
+    if opp.startswith("agent:"):
+        other = selfplay.get(opp)
+    else:
+        other = selfplay.get("tools/opponents.py:" + opp)
+    m, se, A, B = selfplay.match(me, other, deals, seed)
     return opp, m, se, A.time, A.errors
 
 

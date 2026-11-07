@@ -89,6 +89,15 @@ def match(modA, modB, deals=1000, seed=1):
 def get(spec):
     if spec == "agent":
         return load_module(os.path.join(ROOT, "agent.py"), "agent_mod")
+    if spec.startswith("agent:"):          # frozen older version in tools/versions/<name>
+        vdir = os.path.join(ROOT, "tools", "versions", spec.split(":")[1])
+        sys.path.insert(0, vdir)
+        sys.modules.pop("bot_core", None)
+        try:
+            return load_module(os.path.join(vdir, "agent.py"), "agent_" + spec.split(":")[1])
+        finally:
+            sys.path.remove(vdir)
+            sys.modules.pop("bot_core", None)
     path, name = spec.split(":")
     mod = load_module(os.path.join(ROOT, path), "opp_" + name)
     return mod.make(name)

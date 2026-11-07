@@ -37,10 +37,11 @@ _BIT = [1 << c for c in range(36)]
 PARAMS = {
     # bank management (seconds, per half)
     "bank": 8.0,
-    "bank_use": 0.5,          # fraction of the bank we allow ourselves to use
+    "bank_use": 0.5,
+    "hard_use": 0.85,          # stop simulating entirely beyond this fraction of the bank          # fraction of the bank we allow ourselves to use
     "overhead": 0.0004,        # assumed per-decision overhead outside our code
     "max_samples": 900,
-    "min_samples": 60,
+    "min_samples": 50,
     # opponent-range shrink applied to our equity when facing a bet
     "shrink": {0: 0.05, 1: 0.07, 2: 0.09, 3: 0.11},   # legacy (unused when learn_shrink)
     "learn_shrink": True,
@@ -52,9 +53,12 @@ PARAMS = {
     "raise_half_eq": 0.68,
     "bet_pot_eq": 0.68,
     "bet_half_eq": 0.57,
+    "folder_thr": 0.70,        # exploit opponents that fold to raises more often than this
     "semibluff": 0.20,         # probability of a half-pot semi-bluff with a draw-ish hand
-    "pre_open_pct": 0.62,      # preflop raise when equity >= this percentile of hands
+    "pre_open_pct": 0.50,      # preflop raise when equity >= this percentile of hands
     "pre_fold_eq": 0.0,
+    "pre_sb_call_eq": 0.34,    # SB completes the blind only with at least this equity
+    "pre_extra": 0.0,          # extra equity needed to continue preflop vs a raise
 }
 
 # ---------------------------------------------------------------------------
@@ -221,11 +225,12 @@ def river_equity(hole, board, samples, nprng) -> float:
 # Opponent model
 # ---------------------------------------------------------------------------
 
-def init_memory(memory: dict, seed=None) -> None:
+def init_memory(memory: dict, seed=None, num_hands: int = 1000) -> None:
     memory.clear()
     memory.update({
         "rng": random.Random(seed if seed is not None else 12345),
         "nprng": np.random.default_rng(seed if seed is not None else 12345),
+        "num_hands": max(1, int(num_hands)),
         "t_used": 0.0,
         "decisions": 0,
         "hands_seen": 0,
@@ -322,23 +327,30 @@ def opp_bet_strength(memory, street) -> float:
 # Budgeting
 # ---------------------------------------------------------------------------
 
+_F0 = 4.0e-5      # nominal fixed cost of one np_equity call (s) on a fast machine
+_C0 = 1.2e-6      # nominal cost per sample (s)
+
+
 def _sample_budget(memory, street) -> int:
-    """How many MC samples we can afford for this decision (0 = none)."""
+    """How many MC samples we can afford for this decision (0 = out of time).
+
+    `slow` is a running estimate of how much slower this machine is than the
+    nominal one, so the same code adapts to a slow / shared CPU.  We always
+    run at least `min_samples` while the bank has not nearly run out.
+    """
     P = PARAMS
+    hard_left = P["bank"] * P["hard_use"] - memory["t_used"]
+    if hard_left <= 0.0:
+        return 0
+    slow = memory.get("slow", 1.0)
     allowed = P["bank"] * P["bank_use"]
     left = allowed - memory["t_used"]
-    if left <= 0.05:
-        return 0
     hands_done = max(1, memory["hands_seen"])
     dec_per_hand = max(1.5, min(4.0, (memory["decisions"] + 3) / hands_done))
-    hands_left = max(1, 1000 - memory["hands_seen"])
-    per = left / (hands_left * dec_per_hand) - P["overhead"]
-    fixed = memory.get("np_fixed", 3.0e-4)
-    cost = memory.get("np_cost", 2.5e-6)           # seconds per sample (calibrated)
-    n = int((per - fixed) / cost)
-    if n < P["min_samples"]:
-        return 0 if per < fixed else P["min_samples"]
-    return min(P["max_samples"], n)
+    hands_left = max(1, memory.get("num_hands", 1000) - memory["hands_seen"])
+    per = left / (hands_left * dec_per_hand) - P["overhead"] * slow if left > 0 else 0.0
+    n = int((per / slow - _F0) / _C0)
+    return max(P["min_samples"], min(P["max_samples"], n))
 
 
 # ---------------------------------------------------------------------------
@@ -357,10 +369,9 @@ def _estimate_equity(obs, memory):
     t0 = time.perf_counter()
     eq = np_equity(hole, obs.board, n, memory["nprng"])
     dt = time.perf_counter() - t0
-    # calibrate: dt ~= fixed + cost * n  (keep fixed part, adapt per-sample cost)
-    fixed = memory.get("np_fixed", 3.0e-4)
-    c = max(5e-7, (dt - fixed) / n)
-    memory["np_cost"] = 0.8 * memory.get("np_cost", c) + 0.2 * c
+    ratio = dt / (_F0 + _C0 * n)
+    ratio = min(max(ratio, 0.5), 200.0)
+    memory["slow"] = 0.85 * memory.get("slow", ratio) + 0.15 * ratio
     return eq
 
 
@@ -384,6 +395,8 @@ def choose(obs, memory) -> Action:
         act = _fallback_action(obs)
         if act not in obs.legal_actions:
             act = Action.CHECK_CALL
+    if act in (Action.RAISE_HALF, Action.RAISE_POT):
+        memory["raised_this_hand"] = True      # the opponent may fold before we see it in the history
     memory["t_used"] += time.perf_counter() - t0
     memory["decisions"] += 1
     return act
@@ -406,6 +419,7 @@ def _choose(obs, memory) -> Action:
 
     agg = memory["opp_agg"] / memory["opp_agg_n"]
     fold_rate = memory["fold_to_raise"] / memory["fold_to_raise_n"]
+    exploit_folder = memory["fold_to_raise_n"] >= 20 and fold_rate > P["folder_thr"]
     facing_bet = c > 0 and not (street == Street.PREFLOP and obs.opp_bet <= obs.big_blind and obs.raises_this_street == 0)
 
     # --- opponent range shrink when they put in a real bet/raise
@@ -421,6 +435,8 @@ def _choose(obs, memory) -> Action:
     # ---------------- preflop ----------------
     if street == Street.PREFLOP:
         pct = preflop_percentile(eq)
+        if exploit_folder and not facing_bet and can_raise:
+            return Action.RAISE_POT                    # opponent folds too much: steal
         if c == 0:                                     # BB option
             if can_raise and pct >= P["pre_open_pct"] + 0.1:
                 return Action.RAISE_POT if pct >= 0.9 else Action.RAISE_HALF
@@ -428,9 +444,11 @@ def _choose(obs, memory) -> Action:
         if not facing_bet:                             # SB completing / raising vs the BB
             if can_raise and pct >= P["pre_open_pct"]:
                 return Action.RAISE_POT if pct >= 0.85 else Action.RAISE_HALF
-            return Action.CHECK_CALL if eq >= 0.34 or c <= 1 else (Action.FOLD if Action.FOLD in legal else Action.CHECK_CALL)
+            if eq >= P["pre_sb_call_eq"] or c == 0:
+                return Action.CHECK_CALL
+            return Action.FOLD if Action.FOLD in legal else Action.CHECK_CALL
         need = c / (pot + c)
-        if eff < need + P["call_margin"]:
+        if eff < need + P["call_margin"] + P["pre_extra"]:
             return Action.FOLD if Action.FOLD in legal else Action.CHECK_CALL
         if can_pot and eff >= P["raise_pot_eq"] - 0.1:
             return Action.RAISE_POT
@@ -453,6 +471,10 @@ def _choose(obs, memory) -> Action:
         return Action.CHECK_CALL
 
     # no bet to face: value bet / semi-bluff / check
+    if exploit_folder and can_half and eff < P["bet_half_eq"] and street != Street.RIVER:
+        return Action.RAISE_HALF
+    if exploit_folder and can_half and eff < P["bet_half_eq"] and street == Street.RIVER and rng.random() < 0.6:
+        return Action.RAISE_HALF
     if can_pot and eff >= P["bet_pot_eq"]:
         # trap vs very aggressive opponents with a monster
         if eff >= 0.82 and agg > 0.55 and street != Street.RIVER and rng.random() < 0.5:

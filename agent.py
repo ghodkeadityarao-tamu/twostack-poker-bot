@@ -51,7 +51,7 @@ import bot_core
 
 def new_half(config: AgentConfig, memory: dict) -> None:
     """Called at the start of each half-match (1000 hands)."""
-    bot_core.init_memory(memory)
+    bot_core.init_memory(memory, num_hands=getattr(config, "num_hands", 1000))
 
 
 def choose_action(obs: Observation, memory: dict) -> Action:
