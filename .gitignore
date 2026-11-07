@@ -2,4 +2,15 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# local-only testing tools and files (not needed by the tournament)
 tools/versions/
+tools/diagnose.py
+tools/fuzz.py
+tools/match_vs.sh
+tools/opponents.py
+tools/play_human.py
+tools/pool.py
+tools/run_all_tests.sh
+tools/selfplay.py
+tools/sweep.py
+ai_opponents/
