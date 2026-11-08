@@ -1,6 +1,6 @@
 # TwoStack: Heads-Up Short Deck 5-Card PLO Bot
 
-A Python poker bot for the Datathon Poker Bot Challenge (bot name: `EquityBot`).
+A Python poker bot for the Datathon Poker Bot Challenge (bot name: `DoubleStack`).
 
 ## How it works
 - **Preflop:** looks up hand strength in a precomputed table (`data/preflop_eq.json`).

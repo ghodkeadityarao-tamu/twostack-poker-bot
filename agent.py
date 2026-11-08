@@ -40,7 +40,7 @@ warmup()
 
 # rename as your team/bot's name
 PARTICIPANT = "TwoStack"
-AGENT_NAME = "EquityBot"
+AGENT_NAME = "DoubleStack"
 
 
 # ===== YOUR CODE HERE =====
