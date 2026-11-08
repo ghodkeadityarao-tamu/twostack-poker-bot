@@ -385,10 +385,23 @@ def _fallback_action(obs):
     return Action.FOLD if Action.FOLD in legal else Action.CHECK_CALL
 
 
+def _advise(obs, memory, act, eq):
+    """Let the neural-net advisor override the rule-based action (see advisor.py)."""
+    try:
+        import advisor
+        new = advisor.advise(obs, memory, act, eq)
+        return new if new in obs.legal_actions else act
+    except Exception:
+        return act
+
+
 def choose(obs, memory) -> Action:
     t0 = time.perf_counter()
+    memory["last_eq"] = None
     try:
         act = _choose(obs, memory)
+        if memory.get("last_eq") is not None:
+            act = _advise(obs, memory, act, memory["last_eq"])
     except Exception:
         act = _fallback_action(obs)
     if act not in obs.legal_actions:
@@ -414,6 +427,7 @@ def _choose(obs, memory) -> Action:
     can_raise = can_pot or can_half
 
     eq = _estimate_equity(obs, memory)
+    memory["last_eq"] = eq
     if eq is None:
         return _fallback_action(obs)
 
