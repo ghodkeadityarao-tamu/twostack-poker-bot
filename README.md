@@ -24,13 +24,6 @@ python -m pytest -q            # checks the judge can talk to the bot
 ./tools/check_build.sh         # Docker build + smoke test (needs Docker running)
 ```
 
-Play a local match (three terminals):
-```
-python agent.py                              # our bot, port 5008
-python baseline-bots/baseline_random.py      # opponent, port 5009
-python judge_engine.py --seed 1              # referee
-```
-
 ## Submit
 1. Push to the public GitHub repo.
 2. Run `git rev-parse HEAD` to get the full 40-character commit ID.
